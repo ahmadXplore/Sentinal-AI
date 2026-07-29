@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7
+    container_name: sentinelai-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - sentinelai-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Ollama AI Engine
+  ollama:
+    image: ollama/ollama:latest
+    container_name: sentinelai-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - sentinelai-network
+    deploy:
+      resources:
+        reservations:
+          memory: 4G
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sentinelai-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - MONGO_URI=${MONGO_URI:-mongodb://mongodb:27017/sentinelai}
+      - JWT_SECRET=${JWT_SECRET:-sentinelai-dev-secret-key-2024}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - sentinelai-network
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+  # Frontend Next.js App
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sentinelai-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:${BACKEND_PORT:-5000}/api
+    depends_on:
+      - backend
+    networks:
+      - sentinelai-network
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  mongo-data:
+    driver: local
+  ollama-data:
+    driver: local
+
+networks:
+  sentinelai-network:
+    driver: bridge
